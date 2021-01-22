@@ -8,28 +8,36 @@
 template <typename T, typename F>
 void fill(unsigned n, unsigned m, T* mat, F f)
 {
-  for_mat(n,m, [mat,m, f] (unsigned i, unsigned j)
+  for_mat(n,m,[mat,m, f] (unsigned i, unsigned j)
   {
     mat[i * m + j] = f();
   });
 }
 
-template <typename T, typename F>
-void for_mat(unsigned n, unsigned m, F f)
+template <typename T, typename P, typename Q, typename F>
+void for_mat(unsigned n, unsigned m, F f, Q post = [](unsigned i){(void) i;}, P pre = [](unsigned i) {(void) i;})
 {
   for(unsigned i = 0; i < n; i++)
-    for(unsigned j = 0; j < m; j++)
-      f(i,j);
+  {
+    pre(i);
+    for(unsigned j = 0; j < m; j++) f(i,j);
+    post(i);
+  }
 }
 
-
 template <typename T>
-void print_mat(unsigned n, unsigned q, T* ans) {
-  for (int i = 0; i < n; i++)
+void print_mat(unsigned n, unsigned q, T* ans)
+{
+  auto in = [ans, q](unsigned i, unsigned j)
   {
-    for (int k = 0; k < q; k++) std::cerr << ans[i * q + k] << "\t";
+    std::cerr << ans[i * q + j];
+  };
+  auto post = [](unsigned i)
+  {
+    (void) i;
     std::cerr << std::endl;
-  }
+  };
+  for_mat(n,q,in,post);
 }
 
 template<typename T>
@@ -43,17 +51,14 @@ T* cache_oblivious_mat_mul(unsigned n, unsigned m, unsigned o, T* nxm, T* mxo)
 template<typename T>
 int cache_oblivious_mat_mul(unsigned n, unsigned m, unsigned o, T* nxm, T* mxo, T* ans)
 {
-  for(int i = 0; i < n; i++)
+  for_mat(n,o,[ans,nxm,mxo,m,o](unsigned i, unsigned j)
   {
-    for(int j = 0; j < o; j++)
+    ans[i*o + j] = 0;
+    for(int k = 0; k < m; k++)
     {
-      ans[i*o + j] = 0;
-      for(int k = 0; k < m; k++)
-      {
-        ans[i*o + j] += nxm[i*m + k] * mxo[k*o + j];
-      }
+      ans[i*o + j] += nxm[i*m + k] * mxo[k*o + j];
     }
-  }
+  });
   return 0;
 }
 
@@ -107,20 +112,19 @@ public:
     if(end) *rns = malloc(n * o * sizeof(T));
     auto nxm = input["a"].peek_range(n * m);
     auto mxo = input["b"].peek_range(m * o);
+
     T ans;
-    for(int i = 0; i < n; i++)
+    for_mat(n,o,[&](unsigned i, unsigned j)
     {
-      for(int j = 0; j < o; j++)
+      ans = 0;
+      for(int k = 0; k < m; k++)
       {
-        ans = 0;
-        for(int k = 0; k < m; k++)
-        {
-          ans += nxm[i*m + k] * mxo[k*o + j];
-        }
-        if(!end) output["axb"].push(ans);
-        else (*rns)[i * o + j] = ans;
+        ans += nxm[i*m + k] * mxo[k*o + j];
       }
-    }
+      if(!end) output["axb"].push(ans);
+      else (*rns)[i * o + j] = ans;
+    });
+
     input["a"].unpeek();
     input["b"].unpeek();
     input["a"].recycle(n * m);
@@ -128,7 +132,5 @@ public:
     return raft::stop;
   }
 };
-
-
 
 #endif //MATMUL_MAT_MUL_H
