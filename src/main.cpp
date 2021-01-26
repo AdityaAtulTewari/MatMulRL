@@ -6,7 +6,7 @@
 
 unsigned x = 1, y = 4, z = 7, w = 13;
 
-unsigned rand() {
+unsigned rando() {
   unsigned t = x;
   t ^= t << 11;
   t ^= t >> 8;
@@ -22,6 +22,7 @@ int main(int argc, char** argv) {
   if(argc != 6)
   {
     std::cerr << "Exactly 6 arguments are needed" << std::endl;
+    return -1;
   }
   std::istringstream sn (argv[1]);
   std::istringstream sm (argv[2]);
@@ -37,6 +38,7 @@ int main(int argc, char** argv) {
   {
     std::cerr << "One of your arguments was malformed:" << std::endl;
     for(int i = 1; i < 6; i++) std::cerr << i << "\t" << argv[i] << std::endl;
+    return -2;
   }
 
   unsigned* a = (unsigned *) malloc(n * m * sizeof(unsigned));
@@ -44,10 +46,11 @@ int main(int argc, char** argv) {
   unsigned* c = (unsigned *) malloc(o * p * sizeof(unsigned));
   unsigned* d = (unsigned *) malloc(p * q * sizeof(unsigned));
 
-  fill<unsigned>(n,m,a, []{return rand() % 1000;});
-  fill<unsigned>(m,o,b, []{return rand() % 1000;});
-  fill<unsigned>(o,p,c, []{return rand() % 1000;});
-  fill<unsigned>(p,q,d, []{return rand() % 1000;});
+  fill<unsigned>(n,m,a, []{return rando() % 1000;});
+  fill<unsigned>(m,o,b, []{return rando() % 1000;});
+  fill<unsigned>(o,p,c, []{return rando() % 1000;});
+  fill<unsigned>(p,q,d, []{return rando() % 1000;});
+
   Timing<true> t;
 
   t.s();
@@ -56,18 +59,21 @@ int main(int argc, char** argv) {
   unsigned* ans = cache_oblivious_mat_mul<unsigned>(n,o,q,axb,cxd);
   t.e();
 
+  t.p("N ZC MM");
+
   unsigned* rns;
 
-  COMatMul<unsigned> ab = COMatMul<unsigned>(n,m,o,a,b);
-  COMatMul<unsigned> cd = COMatMul<unsigned>(o,p,q,c,d);
-  COMatMul<unsigned> abcd = COMatMul<unsigned>(&rns);
+  StartMatMul<unsigned> ab = StartMatMul<unsigned>(n,m,o,a,b);
+  StartMatMul<unsigned> cd = StartMatMul<unsigned>(o,p,q,c,d);
+  EndMatMul<unsigned> abcd = EndMatMul<unsigned>(&rns);
 
 
   raft::map map;
   map += ab["axb"] >> abcd["a"];
   map += cd["axb"] >> abcd["b"];
   map += ab["n"] >> abcd["n"];
-  map += ab["o"] >> abcd["m"];
+  map += ab["o"] >> abcd["m0"];
+  map += cd["n"] >> abcd["m1"];
   map += cd["o"] >> abcd["o"];
 
   Timing<true> r;
@@ -75,12 +81,38 @@ int main(int argc, char** argv) {
   map.exe();
   r.e();
 
-  print_mat(n,q,ans);
-  print_mat(n,q,rns);
-  for_mat<unsigned>(n,q,[ans,rns,q](unsigned i, unsigned j){
+  for_mat_inner(n,q,[ans,rns,q](unsigned i, unsigned j){
     assert(ans[q * i + j] == rns[q * i + j]);
   });
-  t.p("Normal Mat Mult");
-  r.p("RaftLib Mat Mult");
+
+  r.p("RL MC MM");
+
+#if 0
+  unsigned* zns;
+  StartMatMul_1Copy<unsigned> zab = StartMatMul_1Copy<unsigned>(n,m,o,a,b);
+  StartMatMul_1Copy<unsigned> zcd = StartMatMul_1Copy<unsigned>(o,p,q,c,d);
+  EndMatMul_1Copy<unsigned> zabcd = EndMatMul_1Copy<unsigned>(&zns);
+
+  raft::map zap;
+  zap += zab["axb"] >> zabcd["a"];
+  zap += zcd["axb"] >> zabcd["b"];
+  zap += zab["n"] >> zabcd["n"];
+  zap += zab["o"] >> zabcd["m0"];
+  zap += zcd["n"] >> zabcd["m1"];
+  zap += zcd["o"] >> zabcd["o"];
+
+  Timing<true> z;
+  z.s();
+  zap.exe();
+  z.e();
+
+
+  for_mat_inner(n,q,[ans,zns,q](unsigned i, unsigned j){
+    assert(ans[q * i + j] == zns[q * i + j]);
+  });
+
+  z.p("RaftLib One Copy Mat Mult");
+#endif
+
   return 0;
 }

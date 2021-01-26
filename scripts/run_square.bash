@@ -1,6 +1,6 @@
 #!/bin/bash
 
-NUM=100
+NUM=50
 VAL=10
 for i in `seq 1 $NUM`; do
   echo $VAL
