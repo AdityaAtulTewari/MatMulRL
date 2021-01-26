@@ -3,9 +3,9 @@
 #include "mat_mul.h"
 #include "timing.h"
 #include <raft>
+#include <getopt.h>
 
 unsigned x = 1, y = 4, z = 7, w = 13;
-
 unsigned rando() {
   unsigned t = x;
   t ^= t << 11;
@@ -18,28 +18,86 @@ unsigned rando() {
   return w;
 }
 
-int main(int argc, char** argv) {
-  if(argc != 6)
+void usage(char* arg0)
+{
+  std::cerr << "Usage:\t" << arg0 << " [-c -v -d] n m o p q" << std::endl;
+}
+
+enum ALLOC_TYPE
+{
+ STD_ALLOC,
+ DYN_ALLOC,
+ VTL_ALLOC
+};
+
+void parse_args(int argc, char** argv, unsigned* n, unsigned* m, unsigned* o, unsigned* p, unsigned* q, bool* check, ALLOC_TYPE* at, bool* sched)
+{
+  int opt;
+  char* arg0 = argv[0];
+  auto us = [arg0] () {usage(arg0);};
+  while((opt = getopt(argc, argv, "cvdq")) != -1)
   {
-    std::cerr << "Exactly 6 arguments are needed" << std::endl;
-    return -1;
+    switch(opt)
+    {
+      case 'v' :
+        *at = VTL_ALLOC;
+        break;
+      case 'd' :
+        *at = DYN_ALLOC;
+        break;
+      case 'q' :
+        *sched = true;
+        break;
+      case 'c' :
+        *check = true;
+        break;
+    }
   }
-  std::istringstream sn (argv[1]);
-  std::istringstream sm (argv[2]);
-  std::istringstream so (argv[3]);
-  std::istringstream sp (argv[4]);
-  std::istringstream sq (argv[5]);
+  std::istringstream sarr[5];
+  unsigned darr[5];
+  unsigned i;
+  for(i = 0; i < 5; i++)
+  {
+    if(optind + i == argc)
+    {
+      std::cerr << "You have too few unsigned int arguments: " << i << " out of 5" << std::endl;
+      us();
+      exit(-3);
+    }
+    sarr[i] = std::istringstream(argv[optind + i]);
+    if(!(sarr[i] >> darr[i]))
+    {
+      std::cerr << "Your argument at " << optind + i << " was malformed" << std::endl;
+      std::cerr << "It should have been an unsigned int" << std::endl;
+      us();
+      exit(-2);
+    }
+  }
+  if(i + optind != argc)
+  {
+    std::cerr << "You have too many arguments." << std::endl;
+    us();
+    exit(-1);
+  }
+
+  *n = darr[0];
+  *m = darr[1];
+  *o = darr[2];
+  *p = darr[3];
+  *q = darr[4];
+}
+
+int main(int argc, char** argv)
+{
   unsigned n;
   unsigned m;
   unsigned o;
   unsigned p;
   unsigned q;
-  if(!(sn >> n) || !(sm >> m) || !(so >> o) || !(sp >> p) || !(sq >> q))
-  {
-    std::cerr << "One of your arguments was malformed:" << std::endl;
-    for(int i = 1; i < 6; i++) std::cerr << i << "\t" << argv[i] << std::endl;
-    return -2;
-  }
+  bool check = false;
+  bool sched = false;
+  ALLOC_TYPE at = STD_ALLOC;
+  parse_args(argc, argv, &n, &m, &o, &p, &q, &check, &at, &sched);
 
   unsigned* a = (unsigned *) malloc(n * m * sizeof(unsigned));
   unsigned* b = (unsigned *) malloc(m * o * sizeof(unsigned));
@@ -51,15 +109,6 @@ int main(int argc, char** argv) {
   fill<unsigned>(o,p,c, []{return rando() % 1000;});
   fill<unsigned>(p,q,d, []{return rando() % 1000;});
 
-  Timing<true> t;
-
-  t.s();
-  unsigned* axb = cache_oblivious_mat_mul<unsigned>(n,m,o,a,b);
-  unsigned* cxd = cache_oblivious_mat_mul<unsigned>(o,p,q,c,d);
-  unsigned* ans = cache_oblivious_mat_mul<unsigned>(n,o,q,axb,cxd);
-  t.e();
-
-  t.p("N ZC MM");
 
   unsigned* rns;
 
@@ -78,14 +127,36 @@ int main(int argc, char** argv) {
 
   Timing<true> r;
   r.s();
-  map.exe();
+#ifdef VL
+  if(at == VTL_ALLOC) map.exe<partition_dummy, simple_schedule, vlalloc, no_parallel>();
+  else
+  {
+#endif
+  if(at == DYN_ALLOC) map.exe<partition_dummy, simple_schedule, dynalloc, no_parallel>();
+  else map.exe<partition_dummy, simple_schedule, stdalloc, no_parallel>();
+#ifdef VL
+  }
+#endif
   r.e();
 
-  for_mat_inner(n,q,[ans,rns,q](unsigned i, unsigned j){
-    assert(ans[q * i + j] == rns[q * i + j]);
-  });
-
   r.p("RL MC MM");
+
+  if(check)
+  {
+    Timing<true> t;
+
+    t.s();
+    unsigned* axb = cache_oblivious_mat_mul<unsigned>(n,m,o,a,b);
+    unsigned* cxd = cache_oblivious_mat_mul<unsigned>(o,p,q,c,d);
+    unsigned* ans = cache_oblivious_mat_mul<unsigned>(n,o,q,axb,cxd);
+    t.e();
+
+    t.p("SE ZC MM");
+    if(check) for_mat_inner(n,q,[ans,rns,q](unsigned i, unsigned j){
+      assert(ans[q * i + j] == rns[q * i + j]);
+    });
+  }
+
 
 #if 0
   unsigned* zns;
