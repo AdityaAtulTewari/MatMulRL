@@ -1,6 +1,0 @@
-[submodule "deps/RaftLib"]
-	path = deps/RaftLib
-	url = https://github.com/RaftLib/RaftLib.git
-[submodule "deps/qthreads"]
-	path = deps/qthreads
-	url = https://github.com/RaftLib/qthreads.git
