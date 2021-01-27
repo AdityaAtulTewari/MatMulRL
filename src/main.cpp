@@ -67,7 +67,7 @@ void parse_args(int argc, char** argv, unsigned* n, unsigned* m, unsigned* o, un
     sarr[i] = std::istringstream(argv[optind + i]);
     if(!(sarr[i] >> darr[i]))
     {
-      std::cerr << "Your argument at " << optind + i << " was malformed" << std::endl;
+      std::cerr << "Your argument at " << optind + i << " was malformed." << std::endl;
       std::cerr << "It should have been an unsigned int" << std::endl;
       us();
       exit(-2);
@@ -128,15 +128,32 @@ int main(int argc, char** argv)
   Timing<true> r;
   r.s();
 #ifdef VL
-  if(at == VTL_ALLOC) map.exe<partition_dummy, simple_schedule, vlalloc, no_parallel>();
-  else
+  if(at == VTL_ALLOC)
   {
+#ifdef QT
+    if(sched) map.exe<partition_dummy,simple_schedule,vlalloc,no_parallel>();
+    else
 #endif
-  if(at == DYN_ALLOC) map.exe<partition_dummy, simple_schedule, dynalloc, no_parallel>();
-  else map.exe<partition_dummy, simple_schedule, stdalloc, no_parallel>();
-#ifdef VL
+    map.exe<partition_dummy,pool_schedule,vlalloc,no_parallel>();
   }
+  else
 #endif
+
+  if(at == DYN_ALLOC)
+  {
+#ifdef QT
+    if(sched) map.exe<partition_dummy, pool_schedule, dynalloc, no_parallel>();
+    else
+#endif
+      map.exe<partition_dummy, simple_schedule, dynalloc, no_parallel>();
+  }
+  else
+#ifdef QT
+    if(sched) map.exe<partition_dummy, pool_schedule, stdalloc, no_parallel>();
+    else
+#endif
+    map.exe<partition_dummy, simple_schedule, stdalloc, no_parallel>();
+
   r.e();
 
   r.p("RL MC MM");
@@ -187,3 +204,4 @@ int main(int argc, char** argv)
 
   return 0;
 }
+
