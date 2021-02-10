@@ -54,14 +54,6 @@ void print_mat(unsigned n, unsigned q, T* ans)
 }
 
 template<typename T>
-T* cache_oblivious_mat_mul(unsigned n, unsigned m, unsigned o, T* nxm, T* mxo)
-{
-  T* ans = (T*) calloc(n * o, sizeof(T));
-  cache_oblivious_mul<T>(ans,n,m,o,nxm,mxo);
-  return ans;
-}
-
-template<typename T>
 int cache_oblivious_mul(T* ans, unsigned n, unsigned m, unsigned o, T* nxm, T* mxo)
 {
   for_mat_inner(n,o,[ans,nxm,mxo,m,o](unsigned i, unsigned j)
@@ -74,6 +66,15 @@ int cache_oblivious_mul(T* ans, unsigned n, unsigned m, unsigned o, T* nxm, T* m
   });
   return 0;
 }
+
+template<typename T>
+T* cache_oblivious_mat_mul(unsigned n, unsigned m, unsigned o, T* nxm, T* mxo)
+{
+  T* ans = (T*) calloc(n * o, sizeof(T));
+  cache_oblivious_mul<T>(ans,n,m,o,nxm,mxo);
+  return ans;
+}
+
 
 #include <raft>
 
