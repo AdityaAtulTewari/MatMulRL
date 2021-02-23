@@ -20,7 +20,7 @@ unsigned rando() {
 
 void usage(char* arg0)
 {
-  std::cerr << "Usage:\t" << arg0 << " [-c -v -d] n m o p q" << std::endl;
+  std::cerr << "Usage:\t" << arg0 << " [-c -v -d -q[1-3]] n m o p q" << std::endl;
 }
 
 enum ALLOC_TYPE
@@ -35,8 +35,10 @@ void parse_args(int argc, char** argv, unsigned* n, unsigned* m, unsigned* o, un
   int opt;
   char* arg0 = argv[0];
   auto us = [arg0] () {usage(arg0);};
-  while((opt = getopt(argc, argv, "cvdq")) != -1)
+  int helper;
+  while((opt = getopt(argc, argv, "cvdq:")) != -1)
   {
+    std::ostringstream num_hwpar;
     switch(opt)
     {
       case 'v' :
@@ -46,8 +48,26 @@ void parse_args(int argc, char** argv, unsigned* n, unsigned* m, unsigned* o, un
         *at = DYN_ALLOC;
         break;
       case 'q' :
+        helper = atoi(optarg);
+        if(1 > helper || 3 < helper)
+        {
+          std::cerr << "You failed to properly specify the number of qthreads" << std::endl;
+          us();
+          exit(-4);
+        }
+        helper++;
+        if(setenv("QT_NUM_SHEPHERDS", "1", 1) ||
+            !(num_hwpar << helper) ||
+            setenv("QT_HWPAR", num_hwpar.str().c_str(), 1) ||
+            setenv("QT_NUM_WORKERS_PER_SHEPHERD", num_hwpar.str().c_str(), 1))
+        {
+          std::cerr << "Setting environment variables failed" << std::endl;
+          us();
+          exit(-5);
+        }
         *sched = true;
         break;
+
       case 'c' :
         *check = true;
         break;
@@ -130,28 +150,28 @@ int main(int argc, char** argv)
 #ifdef VL
   if(at == VTL_ALLOC)
   {
-#ifdef QT
+#if USEQTHREADS
     if(sched) map.exe<partition_dummy,simple_schedule,vlalloc,no_parallel>();
     else
-#endif
+#endif /* USEQTHREADS */
     map.exe<partition_dummy,pool_schedule,vlalloc,no_parallel>();
   }
   else
-#endif
+#endif /* VL */
 
   if(at == DYN_ALLOC)
   {
-#ifdef QT
+#ifdef USEQTHREADS
     if(sched) map.exe<partition_dummy, pool_schedule, dynalloc, no_parallel>();
     else
-#endif
+#endif /* USEQTHREADS */
       map.exe<partition_dummy, simple_schedule, dynalloc, no_parallel>();
   }
   else
-#ifdef QT
+#ifdef USEQTHREADS
     if(sched) map.exe<partition_dummy, pool_schedule, stdalloc, no_parallel>();
     else
-#endif
+#endif /* USEQTHREADS */
     map.exe<partition_dummy, simple_schedule, stdalloc, no_parallel>();
 
   r.e();
@@ -204,4 +224,3 @@ int main(int argc, char** argv)
 
   return 0;
 }
-

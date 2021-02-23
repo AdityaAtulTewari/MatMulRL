@@ -11,12 +11,6 @@ add_executable(MatMul src/main.cpp src/mat_mul.h src/timing.h)
 
 target_link_libraries(MatMul PUBLIC PkgConfig::RAFT_LIB)
 
-pkg_check_modules(QTHREADS IMPORTED_TARGET qthreads)
-if(PkgConfig::QTHREADS_FOUND)
-  set(QT 1)
-  target_link_libraries(MatMul PUBLIC PkgConfig::QTHREADS)
-endif()
-
 pkg_check_modules(LIBVL IMPORTED_TARGET libvl)
 if(PkgConfig::LIBVL_FOUND)
   set(VL 1)
