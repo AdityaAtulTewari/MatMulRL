@@ -20,7 +20,7 @@ unsigned rando() {
 
 void usage(char* arg0)
 {
-  std::cerr << "Usage:\t" << arg0 << " [-c -v -d -q[1-3]] n m o p q" << std::endl;
+  std::cerr << "Usage:\t" << arg0 << " [-c -v -d -q[1-3]] n m o p q s" << std::endl;
 }
 
 enum ALLOC_TYPE
@@ -30,13 +30,14 @@ enum ALLOC_TYPE
  VTL_ALLOC
 };
 
-void parse_args(int argc, char** argv, unsigned* n, unsigned* m, unsigned* o, unsigned* p, unsigned* q, bool* check, ALLOC_TYPE* at, bool* sched)
+void parse_args(int argc, char** argv,
+    unsigned* n, unsigned* m, unsigned* o, unsigned* p, unsigned* q, unsigned* s, bool* check, ALLOC_TYPE* at, bool* sched)
 {
   int opt;
   char* arg0 = argv[0];
   auto us = [arg0] () {usage(arg0);};
   int helper;
-  while((opt = getopt(argc, argv, "cvdq:")) != -1)
+  while((opt = getopt(argc, argv, "scvdq:")) != -1)
   {
     std::ostringstream num_hwpar;
     switch(opt)
@@ -46,6 +47,9 @@ void parse_args(int argc, char** argv, unsigned* n, unsigned* m, unsigned* o, un
         break;
       case 'd' :
         *at = DYN_ALLOC;
+        break;
+      case 's' :
+        *at = STD_ALLOC;
         break;
       case 'q' :
         helper = atoi(optarg);
@@ -73,14 +77,14 @@ void parse_args(int argc, char** argv, unsigned* n, unsigned* m, unsigned* o, un
         break;
     }
   }
-  std::istringstream sarr[5];
-  unsigned darr[5];
+  std::istringstream sarr[6];
+  unsigned darr[6];
   unsigned i;
-  for(i = 0; i < 5; i++)
+  for(i = 0; i < 6; i++)
   {
     if(optind + i == argc)
     {
-      std::cerr << "You have too few unsigned int arguments: " << i << " out of 5" << std::endl;
+      std::cerr << "You have too few unsigned int arguments: " << i << " out of 6" << std::endl;
       us();
       exit(-3);
     }
@@ -105,6 +109,7 @@ void parse_args(int argc, char** argv, unsigned* n, unsigned* m, unsigned* o, un
   *o = darr[2];
   *p = darr[3];
   *q = darr[4];
+  *s = darr[5];
 }
 
 int main(int argc, char** argv)
@@ -114,27 +119,35 @@ int main(int argc, char** argv)
   unsigned o;
   unsigned p;
   unsigned q;
+  unsigned s;
   bool check = false;
   bool sched = false;
   ALLOC_TYPE at = STD_ALLOC;
-  parse_args(argc, argv, &n, &m, &o, &p, &q, &check, &at, &sched);
+  parse_args(argc, argv, &n, &m, &o, &p, &q, &s, &check, &at, &sched);
 
-  unsigned* a = (unsigned *) malloc(n * m * sizeof(unsigned));
-  unsigned* b = (unsigned *) malloc(m * o * sizeof(unsigned));
-  unsigned* c = (unsigned *) malloc(o * p * sizeof(unsigned));
-  unsigned* d = (unsigned *) malloc(p * q * sizeof(unsigned));
+  unsigned** a = (unsigned **) malloc(s * sizeof(unsigned*));
+  unsigned** b = (unsigned **) malloc(s * sizeof(unsigned*));
+  unsigned** c = (unsigned **) malloc(s * sizeof(unsigned*));
+  unsigned** d = (unsigned **) malloc(s * sizeof(unsigned*));
 
-  fill<unsigned>(n,m,a, []{return rando() % 1000;});
-  fill<unsigned>(m,o,b, []{return rando() % 1000;});
-  fill<unsigned>(o,p,c, []{return rando() % 1000;});
-  fill<unsigned>(p,q,d, []{return rando() % 1000;});
+  for(unsigned i = 0; i < s; i++)
+  {
+    a[i] = (unsigned*) malloc(n * m * sizeof(unsigned));
+    b[i] = (unsigned*) malloc(m * o * sizeof(unsigned));
+    c[i] = (unsigned*) malloc(o * p * sizeof(unsigned));
+    d[i] = (unsigned*) malloc(p * q * sizeof(unsigned));
+    fill<unsigned>(n,m,a[i], []{return rando() % 1000;});
+    fill<unsigned>(m,o,b[i], []{return rando() % 1000;});
+    fill<unsigned>(o,p,c[i], []{return rando() % 1000;});
+    fill<unsigned>(p,q,d[i], []{return rando() % 1000;});
+  }
 
 
-  unsigned* rns;
+  unsigned** rns = (unsigned**) malloc(s * sizeof(unsigned*));
 
-  StartMatMul<unsigned> ab = StartMatMul<unsigned>(n,m,o,a,b);
-  StartMatMul<unsigned> cd = StartMatMul<unsigned>(o,p,q,c,d);
-  EndMatMul<unsigned> abcd = EndMatMul<unsigned>(&rns);
+  StartMatMul<unsigned> ab = StartMatMul<unsigned>(n,m,o,a,b,rns,s);
+  StartMatMul<unsigned> cd = StartMatMul<unsigned>(o,p,q,c,d,rns,s);
+  EndMatMul<unsigned> abcd = EndMatMul<unsigned>();
 
 
   raft::map map;
@@ -144,6 +157,8 @@ int main(int argc, char** argv)
   map += ab["o"] >> abcd["m0"];
   map += cd["n"] >> abcd["m1"];
   map += cd["o"] >> abcd["o"];
+  map += ab["rns"] >> abcd["rns0"];
+  map += cd["rns"] >> abcd["rns1"];
 
   Timing<true> r;
   r.s();
@@ -181,46 +196,27 @@ int main(int argc, char** argv)
   if(check)
   {
     Timing<true> t;
+    unsigned** ans = (unsigned**) malloc(s * sizeof(unsigned*));
 
     t.s();
-    unsigned* axb = cache_oblivious_mat_mul<unsigned>(n,m,o,a,b);
-    unsigned* cxd = cache_oblivious_mat_mul<unsigned>(o,p,q,c,d);
-    unsigned* ans = cache_oblivious_mat_mul<unsigned>(n,o,q,axb,cxd);
+    for(unsigned l = 0; l < s; l++)
+    {
+      unsigned* axb = cache_oblivious_mat_mul<unsigned>(n,m,o,a[l],b[l]);
+      unsigned* cxd = cache_oblivious_mat_mul<unsigned>(o,p,q,c[l],d[l]);
+      ans[l] = cache_oblivious_mat_mul<unsigned>(n,o,q,axb,cxd);
+      free(axb);
+      free(cxd);
+    }
     t.e();
 
     t.p("SE ZC MM");
-    if(check) for_mat_inner(n,q,[ans,rns,q](unsigned i, unsigned j){
-      assert(ans[q * i + j] == rns[q * i + j]);
-    });
+    for(unsigned l = 0; l < s; l++)
+    {
+      for_mat_inner(n,q,[ans,rns,q,l](unsigned i, unsigned j){
+        assert(ans[l][q * i + j] == rns[l][q * i + j]);
+      });
+    }
   }
-
-
-#if 0
-  unsigned* zns;
-  StartMatMul_1Copy<unsigned> zab = StartMatMul_1Copy<unsigned>(n,m,o,a,b);
-  StartMatMul_1Copy<unsigned> zcd = StartMatMul_1Copy<unsigned>(o,p,q,c,d);
-  EndMatMul_1Copy<unsigned> zabcd = EndMatMul_1Copy<unsigned>(&zns);
-
-  raft::map zap;
-  zap += zab["axb"] >> zabcd["a"];
-  zap += zcd["axb"] >> zabcd["b"];
-  zap += zab["n"] >> zabcd["n"];
-  zap += zab["o"] >> zabcd["m0"];
-  zap += zcd["n"] >> zabcd["m1"];
-  zap += zcd["o"] >> zabcd["o"];
-
-  Timing<true> z;
-  z.s();
-  zap.exe();
-  z.e();
-
-
-  for_mat_inner(n,q,[ans,zns,q](unsigned i, unsigned j){
-    assert(ans[q * i + j] == zns[q * i + j]);
-  });
-
-  z.p("RaftLib One Copy Mat Mult");
-#endif
 
   return 0;
 }

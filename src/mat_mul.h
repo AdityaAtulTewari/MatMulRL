@@ -70,11 +70,10 @@ int cache_oblivious_mul(T* ans, unsigned n, unsigned m, unsigned o, T* nxm, T* m
 template<typename T>
 T* cache_oblivious_mat_mul(unsigned n, unsigned m, unsigned o, T* nxm, T* mxo)
 {
-  T* ans = (T*) calloc(n * o, sizeof(T));
+  T* ans = (T*) malloc(n * o * sizeof(T));
   cache_oblivious_mul<T>(ans,n,m,o,nxm,mxo);
   return ans;
 }
-
 
 #include <raft>
 
@@ -83,31 +82,38 @@ class StartMatMul : public raft::kernel
 {
 private:
   unsigned n,m,o;
-  T* a;
-  T* b;
+  T** a;
+  T** b;
+  T** rns;
+  unsigned s;
 public:
-  StartMatMul(unsigned n, unsigned m, unsigned o, T* a, T* b) : raft::kernel(),n(n),m(m),o(o),a(a),b(b)
+  StartMatMul(unsigned n, unsigned m, unsigned o, T** a, T** b, T** rns, unsigned s) : raft::kernel(),n(n),m(m),o(o),a(a),b(b),rns(rns),s(s)
   {
     output.addPort<unsigned>("n");
     output.addPort<unsigned>("o");
     output.addPort<T>("axb");
+    output.addPort<uintptr_t>("rns");
   }
   raft::kstatus run() override
   {
-    output["n"].push(n);
-    output["o"].push(o);
-
-    T ans;
-    for_mat_inner(n,o,[&](unsigned i, unsigned j)
+    for(unsigned l = 0; l < s; l++)
     {
-      ans = 0;
-      for(int k = 0; k < m; k++)
-      {
-        ans += a[i*m + k] * b[k*o + j];
-      }
-      output["axb"].push(ans);
-    });
+      output["n"].push(n);
+      output["o"].push(o);
+      output["rns"].push((uintptr_t)&rns[l]);
 
+
+      T ans;
+      for_mat_inner(n,o,[&](unsigned i, unsigned j)
+      {
+        ans = 0;
+        for(int k = 0; k < m; k++)
+        {
+          ans += a[l][i*m + k] * b[l][k*o + j];
+        }
+        output["axb"].push(ans);
+      });
+    }
     return raft::stop;
   }
 };
@@ -115,21 +121,24 @@ public:
 template<typename T>
 class EndMatMul : public raft::kernel
 {
-private:
-  T** rns;
+  typedef T** foo;
 public:
-  EndMatMul(T** rns) : raft::kernel(),rns(rns)
+  EndMatMul() : raft::kernel()
   {
     input.addPort<unsigned>("n");
     input.addPort<unsigned>("m0");
     input.addPort<unsigned>("m1");
     input.addPort<unsigned>("o");
-    input.addPort<unsigned>("a");
-    input.addPort<unsigned>("b");
+    input.addPort<T>("a");
+    input.addPort<T>("b");
+    input.addPort<uintptr_t>("rns0");
+    input.addPort<uintptr_t>("rns1");
   }
   raft::kstatus run() override
   {
     unsigned n,m,m_b,o;
+    uintptr_t rns0;
+    uintptr_t rns1;
     input["n"].pop(n);
     input["m0"].pop(m);
     input["m1"].pop(m_b);
@@ -140,6 +149,10 @@ public:
 
     auto nxm = (T*) malloc(n * m * sizeof(T));
     auto mxo = (T*) malloc(m * o * sizeof(T));
+    input["rns0"].pop(rns0);
+    input["rns1"].pop(rns1);
+    assert(rns0 == rns1);
+    auto rns = (T**) rns0;
     *rns = (T*) malloc(n * o * sizeof(T));
 
     for_mat_inner(n,m,[nxm,this,m](unsigned i, unsigned j)
@@ -161,94 +174,9 @@ public:
       }
       (*rns)[i*o + j] = ans;
     });
-    return raft::stop;
-  }
-};
-
-template<typename T>
-class StartMatMul_1Copy : public raft::kernel
-{
-private:
-  unsigned n,m,o;
-  T* a;
-  T* b;
-public:
-  StartMatMul_1Copy(unsigned n, unsigned m, unsigned o, T* a, T* b) : raft::kernel(),n(n),m(m),o(o),a(a),b(b)
-  {
-    output.addPort<unsigned>("n");
-    output.addPort<unsigned>("o");
-    output.addPort<T>("axb");
-  }
-  raft::kstatus run() override
-  {
-
-    auto nxo = output["axb"].allocate_range<T>(n * o);
-
-    for_mat_inner(n,o,[&](unsigned i, unsigned j)
-    {
-      nxo[i*o + j].get() = 0u;
-      for(int k = 0; k < m; k++)
-      {
-        nxo[i*o + j].get() += a[i*m + k] * b[k*o + j];
-      }
-    });
-
-    output["axb"].send_range();
-
-    output["n"].push(n);
-    output["o"].push(o);
-
-    return raft::stop;
-  }
-};
-
-template<typename T>
-class EndMatMul_1Copy : public raft::kernel
-{
-private:
-  T** rns;
-public:
-  EndMatMul_1Copy(T** rns) : raft::kernel(),rns(rns)
-  {
-    input.addPort<unsigned>("n");
-    input.addPort<unsigned>("m0");
-    input.addPort<unsigned>("m1");
-    input.addPort<unsigned>("o");
-    input.addPort<unsigned>("a");
-    input.addPort<unsigned>("b");
-  }
-  raft::kstatus run() override
-  {
-    unsigned n,m,m_b,o;
-    input["n"].pop(n);
-    input["m0"].pop(m);
-    input["m1"].pop(m_b);
-    input["o"].pop(o);
-
-    //Check to make sure this multiplication is valid
-    assert(m == m_b);
-
-    *rns = (T*) malloc(n * o * sizeof(T));
-    std::vector<std::pair<unsigned,raft::signal>> nxm = std::vector<std::pair<unsigned,raft::signal>>(n * m);
-    std::vector<std::pair<unsigned,raft::signal>> mxo = std::vector<std::pair<unsigned,raft::signal>>(m * o);
-    input["a"].pop_range<T>(nxm,n * m);
-    input["b"].pop_range<T>(mxo,m * o);
-
-    T ans;
-    for_mat_inner(n,o,[&](unsigned i, unsigned j)
-    {
-      ans = 0;
-      for(int k = 0; k < m; k++)
-      {
-        ans += nxm[i*m + k].first * mxo[k*o + j].first;
-      }
-      (*rns)[i*o + j] = ans;
-    });
-    input["a"].unpeek();
-    input["b"].unpeek();
-    input["a"].recycle(n * m);
-    input["b"].recycle(m * o);
-    return raft::stop;
+    free(nxm);
+    free(mxo);
+    return raft::proceed;
   }
 };
 
